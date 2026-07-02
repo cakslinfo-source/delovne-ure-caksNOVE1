@@ -3,6 +3,7 @@ import { Redis } from '@upstash/redis';
 const redis = new Redis({
   url: process.env.UPSTASH_REDIS_RESET_KV_REST_API_URL,
   token: process.env.UPSTASH_REDIS_RESET_KV_REST_API_TOKEN,
+  automaticDeserialization: false,
 });
 
 // GET /api/kv/[key]  ->  { value: string | null }
