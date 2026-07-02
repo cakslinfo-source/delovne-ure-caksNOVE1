@@ -1,6 +1,13 @@
+import './globals.css';
+
 export const metadata = {
   title: 'Delovne ure - Kamnoseštvo Čakš',
   description: 'Evidenca delovnega časa, dopusta, nadur in bolniške',
+};
+
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
 };
 
 export default function RootLayout({ children }) {
