@@ -132,7 +132,49 @@ function randomPin() {
   return String(Math.floor(1000 + Math.random() * 9000));
 }
 
-const TYPE_LABEL = { delo: 'Delo', dopust: 'Dopust', bolniska: 'Bolniška' };
+const TYPE_LABEL = { delo: 'Delo', dopust: 'Dopust', bolniska: 'Bolniška', praznik: 'Praznik' };
+
+// Velikonočna nedelja po Gaussovem/anonimnem gregorijanskem algoritmu (velja za katerokoli leto)
+function easterSunday(year) {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(year, month - 1, day);
+}
+
+// Slovenski državni prazniki, ki so uradno dela prosti dnevi (velja za katerokoli leto).
+function getSlovenianHolidays(year) {
+  const fmt = (y, m, d) => `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  const easter = easterSunday(year);
+  const easterMonday = new Date(easter);
+  easterMonday.setDate(easterMonday.getDate() + 1);
+  return [
+    { date: fmt(year, 1, 1), name: 'Novo leto' },
+    { date: fmt(year, 1, 2), name: 'Novo leto' },
+    { date: fmt(year, 2, 8), name: 'Prešernov dan' },
+    { date: fmt(easterMonday.getFullYear(), easterMonday.getMonth() + 1, easterMonday.getDate()), name: 'Velikonočni ponedeljek' },
+    { date: fmt(year, 4, 27), name: 'Dan upora proti okupatorju' },
+    { date: fmt(year, 5, 1), name: 'Praznik dela' },
+    { date: fmt(year, 5, 2), name: 'Praznik dela' },
+    { date: fmt(year, 6, 25), name: 'Dan državnosti' },
+    { date: fmt(year, 8, 15), name: 'Marijino vnebovzetje' },
+    { date: fmt(year, 10, 31), name: 'Dan reformacije' },
+    { date: fmt(year, 11, 1), name: 'Dan spomina na mrtve' },
+    { date: fmt(year, 12, 25), name: 'Božič' },
+    { date: fmt(year, 12, 26), name: 'Dan samostojnosti in enotnosti' },
+  ];
+}
 const SLO_MONTHS = ['Januar', 'Februar', 'Marec', 'April', 'Maj', 'Junij', 'Julij', 'Avgust', 'September', 'Oktober', 'November', 'December'];
 function monthLabel(yearMonth) {
   const [y, m] = yearMonth.split('-').map(Number);
@@ -247,6 +289,30 @@ export default function App() {
     try { await kvSet('admin_password', pass); }
     catch (e) { console.error('Napaka pri shranjevanju gesla', e); }
   }, []);
+
+  // ---- Samodejno dodajanje slovenskih praznikov (dela prosti dnevi) vsem zaposlenim ----
+  useEffect(() => {
+    if (!loaded || employees.length === 0) return;
+    const thisYear = new Date().getFullYear();
+    const years = [thisYear - 1, thisYear, thisYear + 1];
+    const holidays = years
+      .flatMap((y) => getSlovenianHolidays(y))
+      .filter((h) => !isWeekend(h.date));
+    const existingKeys = new Set(entries.filter((e) => e.type === 'praznik').map((e) => `${e.employeeId}|${e.date}`));
+    const newEntries = [];
+    employees.forEach((emp) => {
+      holidays.forEach((h) => {
+        const key = `${emp.id}|${h.date}`;
+        if (!existingKeys.has(key)) {
+          newEntries.push({ id: uid('h'), employeeId: emp.id, type: 'praznik', date: h.date, clockIn: null, clockOut: null, hours: 8, holidayName: h.name });
+        }
+      });
+    });
+    if (newEntries.length > 0) {
+      persistEntries([...entries, ...newEntries]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, employees, entries]);
 
   // ---- Prijava ----
   const doSetup = () => {
@@ -471,9 +537,11 @@ export default function App() {
     const workDays = workEntries.length;
     const dopustDays = monthEntries.filter((e) => e.type === 'dopust').length;
     const bolniskaDays = monthEntries.filter((e) => e.type === 'bolniska').length;
+    const praznikDays = monthEntries.filter((e) => e.type === 'praznik').length;
+    const praznikHours = praznikDays * 8;
     const yearDopustUsed = entries.filter((e) => e.employeeId === employeeId && e.type === 'dopust' && e.date.startsWith(String(currentYear))).length;
     const vacationRemaining = emp.vacationDaysPerYear - yearDopustUsed;
-    return { regularHours: totals.regular, overtimeHours: totals.overtime, workDays, dopustDays, bolniskaDays, yearDopustUsed, vacationRemaining };
+    return { regularHours: totals.regular, overtimeHours: totals.overtime, workDays, dopustDays, bolniskaDays, praznikDays, praznikHours, yearDopustUsed, vacationRemaining };
   };
 
   const empName = (id) => employees.find((e) => e.id === id)?.name || '—';
@@ -963,8 +1031,8 @@ export default function App() {
                         <td className="py-2 px-3 font-mono">{fmtDate(e.date)}</td>
                         <td className="py-2 px-3">
                           <span className="inline-flex items-center gap-1">
-                            {e.type === 'dopust' ? <Sun size={13} style={{ color: TEAL }} /> : <Stethoscope size={13} style={{ color: AMBER }} />}
-                            {TYPE_LABEL[e.type]}
+                            {e.type === 'dopust' ? <Sun size={13} style={{ color: TEAL }} /> : e.type === 'bolniska' ? <Stethoscope size={13} style={{ color: AMBER }} /> : <CalendarDays size={13} style={{ color: '#5B6C8F' }} />}
+                            {e.type === 'praznik' && e.holidayName ? `Praznik – ${e.holidayName}` : TYPE_LABEL[e.type]}
                           </span>
                         </td>
                         <td className="py-2 px-3 text-right">
@@ -1010,6 +1078,7 @@ export default function App() {
                         <td className="py-2 px-3">Dopust (mesec)</td>
                         <td className="py-2 px-3">Dopust preostanek ({currentYear})</td>
                         <td className="py-2 px-3">Bolniška (mesec)</td>
+                        <td className="py-2 px-3">Praznik (mesec)</td>
                         <td className="py-2 px-3"></td>
                       </tr>
                     </thead>
@@ -1029,6 +1098,7 @@ export default function App() {
                             <td className="py-2 px-3">{s.dopustDays} dni</td>
                             <td className="py-2 px-3">{s.vacationRemaining} / {emp.vacationDaysPerYear} dni</td>
                             <td className="py-2 px-3">{s.bolniskaDays} dni</td>
+                            <td className="py-2 px-3">{s.praznikDays} dni ({s.praznikHours} h)</td>
                             <td className="py-2 px-3 text-right">
                               <button onClick={() => setPrintTarget(emp.id)} className="flex items-center gap-1 text-xs font-sans" style={{ color: '#6B6459' }} title="Izvozi v PDF">
                                 <Printer size={15} />
@@ -1129,6 +1199,7 @@ export default function App() {
         }, { regular: 0, overtime: 0 });
         const dopustAllTime = allEmpEntries.filter((e) => e.type === 'dopust').length;
         const bolniskaAllTime = allEmpEntries.filter((e) => e.type === 'bolniska').length;
+        const praznikAllTime = allEmpEntries.filter((e) => e.type === 'praznik').length;
         const dopustThisYear = allEmpEntries.filter((e) => e.type === 'dopust' && e.date.startsWith(String(currentYear))).length;
         const vacationRemaining = emp.vacationDaysPerYear - dopustThisYear;
         const history = [...allEmpEntries].sort((a, b) => b.date.localeCompare(a.date) || (b.clockIn || '').localeCompare(a.clockIn || ''));
@@ -1144,9 +1215,9 @@ export default function App() {
                   </div>
                   <button onClick={() => setDetailEmployeeId(null)}><X size={20} style={{ color: '#6B6459' }} /></button>
                 </div>
-                <p className="text-xs mb-4" style={{ color: '#9A917E' }}>Celotna zgodovina — vse ure, dopust in bolniška od začetka uporabe.</p>
+                <p className="text-xs mb-4" style={{ color: '#9A917E' }}>Celotna zgodovina — vse ure, dopust, bolniška in prazniki od začetka uporabe.</p>
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5 text-sm">
+                <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-5 text-sm">
                   <div className="p-3" style={{ border: `1px solid ${LINE}` }}>
                     <div className="text-xs" style={{ color: '#9A917E' }}>Redne ure skupaj</div>
                     <div className="font-mono">{fmtHours(totals.regular)}</div>
@@ -1162,6 +1233,10 @@ export default function App() {
                   <div className="p-3" style={{ border: `1px solid ${LINE}` }}>
                     <div className="text-xs" style={{ color: '#9A917E' }}>Bolniška skupaj</div>
                     <div className="font-mono">{bolniskaAllTime} dni</div>
+                  </div>
+                  <div className="p-3" style={{ border: `1px solid ${LINE}` }}>
+                    <div className="text-xs" style={{ color: '#9A917E' }}>Prazniki skupaj</div>
+                    <div className="font-mono">{praznikAllTime} dni ({praznikAllTime * 8} h)</div>
                   </div>
                 </div>
               </div>
@@ -1254,6 +1329,7 @@ export default function App() {
                   <select value={editAbsType} onChange={(e) => setEditAbsType(e.target.value)} className="w-full p-2 text-sm mb-3" style={inputStyle}>
                     <option value="dopust">Dopust</option>
                     <option value="bolniska">Bolniška</option>
+                    <option value="praznik">Praznik</option>
                   </select>
                 </>
               )}
@@ -1296,7 +1372,8 @@ export default function App() {
                     <tr style={{ borderBottom: `1px solid ${LINE}` }}><td className="py-1.5 font-sans" style={{ color: '#6B6459' }}>Nadure</td><td className="py-1.5 text-right" style={{ color: s.overtimeHours > 0.005 ? AMBER : INK }}>{fmtHours(s.overtimeHours)}</td></tr>
                     <tr style={{ borderBottom: `1px solid ${LINE}` }}><td className="py-1.5 font-sans" style={{ color: '#6B6459' }}>Dopust izkoriščen ta mesec</td><td className="py-1.5 text-right">{s.dopustDays} dni</td></tr>
                     <tr style={{ borderBottom: `1px solid ${LINE}` }}><td className="py-1.5 font-sans" style={{ color: '#6B6459' }}>Dopust preostanek ({currentYear})</td><td className="py-1.5 text-right">{s.vacationRemaining} / {emp.vacationDaysPerYear} dni</td></tr>
-                    <tr><td className="py-1.5 font-sans" style={{ color: '#6B6459' }}>Bolniška ta mesec</td><td className="py-1.5 text-right">{s.bolniskaDays} dni</td></tr>
+                    <tr style={{ borderBottom: `1px solid ${LINE}` }}><td className="py-1.5 font-sans" style={{ color: '#6B6459' }}>Bolniška ta mesec</td><td className="py-1.5 text-right">{s.bolniskaDays} dni</td></tr>
+                    <tr><td className="py-1.5 font-sans" style={{ color: '#6B6459' }}>Praznik ta mesec</td><td className="py-1.5 text-right">{s.praznikDays} dni ({s.praznikHours} h)</td></tr>
                   </tbody>
                 </table>
 
