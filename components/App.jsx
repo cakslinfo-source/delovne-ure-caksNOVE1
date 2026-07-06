@@ -1,6 +1,6 @@
 'use client';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Clock, LogIn, LogOut, Plus, Trash2, Users, CalendarDays, TrendingUp, Stethoscope, Sun, Loader2, ShieldCheck, User, Eye, EyeOff, RotateCcw, ArrowLeft, LogOutIcon, Printer, X, Pencil } from 'lucide-react';
+import { Clock, LogIn, LogOut, Plus, Trash2, Users, CalendarDays, TrendingUp, Stethoscope, Sun, Loader2, ShieldCheck, User, Eye, EyeOff, RotateCcw, ArrowLeft, LogOutIcon, Printer, X, Pencil, AlertTriangle } from 'lucide-react';
 
 // Nadomestek za window.storage (deluje samo znotraj Claude artefaktov) -
 // tukaj kličemo naš lasten API, ki podatke shrani v pravo bazo (Vercel KV).
@@ -489,6 +489,10 @@ export default function App() {
       .sort((a, b) => (b.clockIn || '').localeCompare(a.clockIn || ''));
   }, [entries, isAdmin, selfId, uraViewDate]);
 
+  const forgottenClockOuts = useMemo(() => {
+    return entries.filter((e) => e.type === 'delo' && !e.clockOut && e.date !== todayStr());
+  }, [entries]);
+
   const absenceEntries = useMemo(() => {
     const src = isAdmin ? entries : entries.filter((e) => e.employeeId === selfId);
     return [...src].filter((e) => e.type !== 'delo').sort((a, b) => b.date.localeCompare(a.date)).slice(0, 30);
@@ -686,6 +690,30 @@ export default function App() {
         {/* TAB: URA */}
         {tab === 'ura' && (
           <div>
+            {isAdmin && forgottenClockOuts.length > 0 && (
+              <div className="mb-6 p-4" style={{ background: '#FBF0DD', border: `1px solid ${AMBER}` }}>
+                <div className="flex items-center gap-2 mb-2">
+                  <AlertTriangle size={16} style={{ color: AMBER }} />
+                  <span className="font-display uppercase text-sm tracking-wide" style={{ color: '#7A5A1E' }}>
+                    Pozabljen izpis {forgottenClockOuts.length > 1 ? `(${forgottenClockOuts.length})` : ''}
+                  </span>
+                </div>
+                <div className="flex flex-col gap-2">
+                  {forgottenClockOuts.map((e) => (
+                    <div key={e.id} className="flex items-center justify-between flex-wrap gap-2 text-sm">
+                      <span>
+                        <strong style={{ color: empColor(e.employeeId) }}>{empName(e.employeeId)}</strong>
+                        {' '}se je vpisal/a {fmtDate(e.date)} ob {fmtTime(e.clockIn)} in ni izpisan/a.
+                      </span>
+                      <button onClick={() => startEdit(e)} className="px-3 py-1.5 text-xs font-display uppercase tracking-wide" style={{ background: '#7A5A1E', color: '#fff' }}>
+                        Popravi
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {visibleEmployees.length === 0 ? (
               <p className="text-sm py-10 text-center" style={{ color: '#9A917E' }}>Ni podatkov.</p>
             ) : (
