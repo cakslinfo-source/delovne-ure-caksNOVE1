@@ -185,6 +185,8 @@ export default function App() {
 
   const [overviewMonth, setOverviewMonth] = useState(todayStr().slice(0, 7));
   const [printTarget, setPrintTarget] = useState(null);
+  const [uraViewDate, setUraViewDate] = useState(todayStr());
+  const [detailEmployeeId, setDetailEmployeeId] = useState(null);
   const [editEntryId, setEditEntryId] = useState(null);
   const [editDate, setEditDate] = useState('');
   const [editLocationType, setEditLocationType] = useState('delavnica');
@@ -480,10 +482,12 @@ export default function App() {
   const isAdmin = currentUser?.type === 'admin';
   const selfId = currentUser?.type === 'employee' ? currentUser.id : null;
 
-  const recentEntries = useMemo(() => {
+  const dayEntries = useMemo(() => {
     const src = isAdmin ? entries : entries.filter((e) => e.employeeId === selfId);
-    return [...src].sort((a, b) => (b.clockIn || b.date).localeCompare(a.clockIn || a.date)).slice(0, 14);
-  }, [entries, isAdmin, selfId]);
+    return [...src]
+      .filter((e) => e.date === uraViewDate)
+      .sort((a, b) => (b.clockIn || '').localeCompare(a.clockIn || ''));
+  }, [entries, isAdmin, selfId, uraViewDate]);
 
   const absenceEntries = useMemo(() => {
     const src = isAdmin ? entries : entries.filter((e) => e.employeeId === selfId);
@@ -792,15 +796,36 @@ export default function App() {
               </div>
             )}
 
-            {recentEntries.length > 0 && (
-              <div>
-                <h2 className="font-display uppercase text-sm tracking-wide mb-3" style={{ color: '#6B6459' }}>Zadnji vnosi</h2>
+            <div>
+              <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                <h2 className="font-display uppercase text-sm tracking-wide" style={{ color: '#6B6459' }}>Vnosi za dan</h2>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => setUraViewDate(addDays(uraViewDate, -1))} className="p-1.5" style={{ border: `1px solid ${LINE}`, color: '#6B6459' }} title="Prejšnji dan">
+                    <ArrowLeft size={15} />
+                  </button>
+                  <span className="font-mono text-sm min-w-[110px] text-center">{fmtDate(uraViewDate)}</span>
+                  <button
+                    onClick={() => setUraViewDate(addDays(uraViewDate, 1))}
+                    disabled={uraViewDate >= todayStr()}
+                    className="p-1.5"
+                    style={{ border: `1px solid ${LINE}`, color: uraViewDate >= todayStr() ? '#DDD6C7' : '#6B6459', cursor: uraViewDate >= todayStr() ? 'default' : 'pointer' }}
+                    title="Naslednji dan"
+                  >
+                    <ArrowLeft size={15} style={{ transform: 'rotate(180deg)' }} />
+                  </button>
+                  {uraViewDate !== todayStr() && (
+                    <button onClick={() => setUraViewDate(todayStr())} className="text-xs px-2 py-1.5" style={{ border: `1px solid ${LINE}`, color: '#6B6459' }}>Danes</button>
+                  )}
+                </div>
+              </div>
+              {dayEntries.length === 0 ? (
+                <p className="text-sm py-6 text-center" style={{ color: '#9A917E' }}>Za ta dan ni vnosov.</p>
+              ) : (
                 <div className="overflow-x-auto" style={{ border: `1px solid ${LINE}`, background: CARD }}>
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="font-display uppercase text-xs tracking-wide" style={{ borderBottom: `1px solid ${LINE}`, color: '#6B6459' }}>
                         {isAdmin && <td className="py-2 px-3">Zaposleni</td>}
-                        <td className="py-2 px-3">Datum</td>
                         <td className="py-2 px-3">Vrsta</td>
                         <td className="py-2 px-3">Lokacija</td>
                         <td className="py-2 px-3">Prihod</td>
@@ -811,12 +836,11 @@ export default function App() {
                       </tr>
                     </thead>
                     <tbody className="font-mono">
-                      {recentEntries.map((e) => {
+                      {dayEntries.map((e) => {
                         const split = e.type === 'delo' && e.clockOut ? splitHours(e.clockIn, e.clockOut, e.date) : null;
                         return (
                           <tr key={e.id} style={{ borderBottom: `1px solid ${LINE}` }}>
                             {isAdmin && <td className="py-2 px-3 font-sans" style={{ color: empColor(e.employeeId) }}>{empName(e.employeeId)}</td>}
-                            <td className="py-2 px-3">{fmtDate(e.date)}</td>
                             <td className="py-2 px-3 font-sans">{TYPE_LABEL[e.type]}</td>
                             <td className="py-2 px-3 font-sans">
                               {e.type === 'delo' ? (
@@ -845,8 +869,8 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         )}
 
@@ -966,7 +990,11 @@ export default function App() {
                         const s = summarize(emp.id, overviewMonth);
                         return (
                           <tr key={emp.id} style={{ borderBottom: `1px solid ${LINE}` }}>
-                            <td className="py-2 px-3 font-sans" style={{ color: emp.color }}>{emp.name}</td>
+                            <td className="py-2 px-3 font-sans">
+                              <button onClick={() => setDetailEmployeeId(emp.id)} className="underline decoration-dotted" style={{ color: emp.color }} title="Prikaži vse podatke">
+                                {emp.name}
+                              </button>
+                            </td>
                             <td className="py-2 px-3">{s.workDays}</td>
                             <td className="py-2 px-3">{fmtHours(s.regularHours)}</td>
                             <td className="py-2 px-3" style={{ color: s.overtimeHours > 0.005 ? AMBER : INK, fontWeight: s.overtimeHours > 0.005 ? 700 : 400 }}>{fmtHours(s.overtimeHours)}</td>
@@ -1061,6 +1089,96 @@ export default function App() {
           Podatki so shranjeni skupno za vso ekipo. PIN in geslo nudita osnovno ločevanje pogledov, nista pa namenjena varovanju občutljivih podatkov.
         </div>
       </div>
+
+      {detailEmployeeId && (() => {
+        const emp = employees.find((e) => e.id === detailEmployeeId);
+        if (!emp) return null;
+        const allEmpEntries = entries.filter((e) => e.employeeId === detailEmployeeId);
+        const workAll = allEmpEntries.filter((e) => e.type === 'delo' && e.clockOut);
+        const totals = workAll.reduce((acc, e) => {
+          const s = splitHours(e.clockIn, e.clockOut, e.date);
+          return { regular: acc.regular + s.regular, overtime: acc.overtime + s.overtime };
+        }, { regular: 0, overtime: 0 });
+        const dopustAllTime = allEmpEntries.filter((e) => e.type === 'dopust').length;
+        const bolniskaAllTime = allEmpEntries.filter((e) => e.type === 'bolniska').length;
+        const dopustThisYear = allEmpEntries.filter((e) => e.type === 'dopust' && e.date.startsWith(String(currentYear))).length;
+        const vacationRemaining = emp.vacationDaysPerYear - dopustThisYear;
+        const history = [...allEmpEntries].sort((a, b) => b.date.localeCompare(a.date) || (b.clockIn || '').localeCompare(a.clockIn || ''));
+
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(38,36,32,0.6)' }}>
+            <div className="w-full max-w-3xl max-h-[90vh] flex flex-col" style={{ background: CARD }}>
+              <div className="p-6 pb-0">
+                <div className="flex items-center justify-between mb-1">
+                  <div className="flex items-center gap-2">
+                    <span style={{ width: 12, height: 12, borderRadius: '50%', background: emp.color, display: 'inline-block' }} />
+                    <h2 className="font-display text-xl uppercase tracking-wide">{emp.name}</h2>
+                  </div>
+                  <button onClick={() => setDetailEmployeeId(null)}><X size={20} style={{ color: '#6B6459' }} /></button>
+                </div>
+                <p className="text-xs mb-4" style={{ color: '#9A917E' }}>Celotna zgodovina — vse ure, dopust in bolniška od začetka uporabe.</p>
+
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5 text-sm">
+                  <div className="p-3" style={{ border: `1px solid ${LINE}` }}>
+                    <div className="text-xs" style={{ color: '#9A917E' }}>Redne ure skupaj</div>
+                    <div className="font-mono">{fmtHours(totals.regular)}</div>
+                  </div>
+                  <div className="p-3" style={{ border: `1px solid ${LINE}` }}>
+                    <div className="text-xs" style={{ color: '#9A917E' }}>Nadure skupaj</div>
+                    <div className="font-mono" style={{ color: totals.overtime > 0.005 ? AMBER : INK }}>{fmtHours(totals.overtime)}</div>
+                  </div>
+                  <div className="p-3" style={{ border: `1px solid ${LINE}` }}>
+                    <div className="text-xs" style={{ color: '#9A917E' }}>Dopust ({currentYear})</div>
+                    <div className="font-mono">{vacationRemaining} / {emp.vacationDaysPerYear} dni</div>
+                  </div>
+                  <div className="p-3" style={{ border: `1px solid ${LINE}` }}>
+                    <div className="text-xs" style={{ color: '#9A917E' }}>Bolniška skupaj</div>
+                    <div className="font-mono">{bolniskaAllTime} dni</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="px-6 pb-6 overflow-y-auto">
+                {history.length === 0 ? (
+                  <p className="text-sm py-6 text-center" style={{ color: '#9A917E' }}>Za tega zaposlenega še ni nobenega vnosa.</p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="font-display uppercase text-xs tracking-wide" style={{ borderBottom: `1px solid ${LINE}`, color: '#6B6459' }}>
+                        <td className="py-2">Datum</td>
+                        <td className="py-2">Vrsta</td>
+                        <td className="py-2">Lokacija</td>
+                        <td className="py-2">Prihod</td>
+                        <td className="py-2">Odhod</td>
+                        <td className="py-2">Redne</td>
+                        <td className="py-2">Nadure</td>
+                      </tr>
+                    </thead>
+                    <tbody className="font-mono">
+                      {history.map((e) => {
+                        const split = e.type === 'delo' && e.clockOut ? splitHours(e.clockIn, e.clockOut, e.date) : null;
+                        return (
+                          <tr key={e.id} style={{ borderBottom: `1px solid ${LINE}` }}>
+                            <td className="py-1.5">{fmtDate(e.date)}</td>
+                            <td className="py-1.5 font-sans">{TYPE_LABEL[e.type]}</td>
+                            <td className="py-1.5 font-sans">
+                              {e.type === 'delo' ? (e.locationType === 'teren' ? `Teren: ${e.site}` : 'Delavnica') : '—'}
+                            </td>
+                            <td className="py-1.5">{e.type === 'delo' ? fmtTime(e.clockIn) : '—'}</td>
+                            <td className="py-1.5">{e.type === 'delo' ? fmtTime(e.clockOut) : '—'}</td>
+                            <td className="py-1.5">{split ? fmtHours(split.regular) : e.type !== 'delo' ? '8 h' : '—'}</td>
+                            <td className="py-1.5" style={{ color: split && split.overtime > 0.005 ? AMBER : undefined }}>{split && split.overtime > 0.005 ? fmtHours(split.overtime) : '—'}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {isAdmin && editEntryId && (() => {
         const entry = entries.find((e) => e.id === editEntryId);
