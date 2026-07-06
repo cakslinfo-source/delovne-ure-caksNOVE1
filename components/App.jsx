@@ -1,6 +1,6 @@
 'use client';
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Clock, LogIn, LogOut, Plus, Trash2, Users, CalendarDays, TrendingUp, Stethoscope, Sun, Loader2, ShieldCheck, User, Eye, EyeOff, RotateCcw, ArrowLeft, LogOutIcon, Printer, X, Pencil, AlertTriangle } from 'lucide-react';
+import { Clock, LogIn, LogOut, Plus, Trash2, Users, CalendarDays, TrendingUp, Stethoscope, Sun, Loader2, ShieldCheck, User, Eye, EyeOff, RotateCcw, ArrowLeft, LogOutIcon, Printer, X, Pencil, AlertTriangle, Download, Upload } from 'lucide-react';
 
 // Nadomestek za window.storage (deluje samo znotraj Claude artefaktov) -
 // tukaj kličemo naš lasten API, ki podatke shrani v pravo bazo (Vercel KV).
@@ -238,6 +238,8 @@ export default function App() {
   const [editAbsType, setEditAbsType] = useState('dopust');
   const [editError, setEditError] = useState('');
   const [newAdminPass, setNewAdminPass] = useState('');
+  const [restoreMsg, setRestoreMsg] = useState('');
+  const [pendingRestore, setPendingRestore] = useState(null);
   const [adminPassMsg, setAdminPassMsg] = useState('');
 
   useEffect(() => {
@@ -393,6 +395,46 @@ export default function App() {
     setNewAdminPass('');
     setAdminPassMsg('Geslo spremenjeno.');
     setTimeout(() => setAdminPassMsg(''), 3000);
+  };
+
+  const downloadBackup = () => {
+    const data = { exportedAt: new Date().toISOString(), employees, entries };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `caks-varnostna-kopija-${todayStr()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleRestoreFile = (file) => {
+    setRestoreMsg('');
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const data = JSON.parse(reader.result);
+        if (!Array.isArray(data.employees) || !Array.isArray(data.entries)) {
+          setRestoreMsg('Datoteka ni videti kot veljavna varnostna kopija.');
+          return;
+        }
+        setPendingRestore(data);
+      } catch (e) {
+        setRestoreMsg('Datoteke ni bilo mogoče prebrati.');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const confirmRestore = () => {
+    if (!pendingRestore) return;
+    persistEmployees(pendingRestore.employees);
+    persistEntries(pendingRestore.entries);
+    setPendingRestore(null);
+    setRestoreMsg('Podatki so obnovljeni.');
+    setTimeout(() => setRestoreMsg(''), 4000);
   };
 
   // ---- Štemplanje ----
@@ -1179,6 +1221,32 @@ export default function App() {
                 <button onClick={changeAdminPassword} className="px-4 py-2 font-display text-sm uppercase tracking-wide" style={{ background: INK, color: PAPER }}>Shrani</button>
                 {adminPassMsg && <span className="text-xs" style={{ color: '#6B6459' }}>{adminPassMsg}</span>}
               </div>
+            </div>
+
+            <div className="p-5 mt-8" style={{ background: CARD, border: `1px solid ${LINE}` }}>
+              <h2 className="font-display uppercase text-sm tracking-wide mb-2" style={{ color: '#6B6459' }}>Varnostna kopija podatkov</h2>
+              <p className="text-xs mb-4" style={{ color: '#9A917E' }}>Prenesi datoteko z vsemi podatki (zaposleni, ure, dopust, bolniška, prazniki) za primer, če bi bilo kdaj karkoli treba obnoviti.</p>
+              <div className="flex flex-wrap items-center gap-3">
+                <button onClick={downloadBackup} className="flex items-center gap-2 px-4 py-2 font-display text-sm uppercase tracking-wide" style={{ background: TEAL, color: '#fff' }}>
+                  <Download size={15} /> Prenesi varnostno kopijo
+                </button>
+                <label className="flex items-center gap-2 px-4 py-2 font-display text-sm uppercase tracking-wide cursor-pointer" style={{ border: `1px solid ${LINE}`, color: '#6B6459' }}>
+                  <Upload size={15} /> Obnovi iz datoteke
+                  <input type="file" accept="application/json" className="hidden" onChange={(e) => e.target.files[0] && handleRestoreFile(e.target.files[0])} />
+                </label>
+              </div>
+              {restoreMsg && <p className="text-xs mt-2" style={{ color: '#6B6459' }}>{restoreMsg}</p>}
+              {pendingRestore && (
+                <div className="mt-4 p-3" style={{ background: '#F6E3DF', border: `1px solid ${STAMP}` }}>
+                  <p className="text-sm mb-2" style={{ color: STAMP }}>
+                    Obnovitev bo <strong>prepisala vse trenutne podatke</strong> ({employees.length} zaposlenih, {entries.length} vnosov) z vsebino datoteke ({pendingRestore.employees.length} zaposlenih, {pendingRestore.entries.length} vnosov). Tega ni mogoče razveljaviti.
+                  </p>
+                  <div className="flex gap-2">
+                    <button onClick={confirmRestore} className="px-3 py-1.5 text-xs font-display uppercase tracking-wide" style={{ background: STAMP, color: '#fff' }}>Da, prepiši podatke</button>
+                    <button onClick={() => setPendingRestore(null)} className="px-3 py-1.5 text-xs font-display uppercase tracking-wide" style={{ border: `1px solid ${LINE}`, color: '#6B6459' }}>Prekliči</button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
