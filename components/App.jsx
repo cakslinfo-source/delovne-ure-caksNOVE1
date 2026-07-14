@@ -228,6 +228,14 @@ export default function App() {
   const [overviewMonth, setOverviewMonth] = useState(todayStr().slice(0, 7));
   const [printTarget, setPrintTarget] = useState(null);
   const [uraViewDate, setUraViewDate] = useState(todayStr());
+  const [uraFilterEmployee, setUraFilterEmployee] = useState('');
+  const [addEntryOpen, setAddEntryOpen] = useState(false);
+  const [addEntryType, setAddEntryType] = useState('delo');
+  const [addEntryLocationType, setAddEntryLocationType] = useState('delavnica');
+  const [addEntrySite, setAddEntrySite] = useState('');
+  const [addEntryClockIn, setAddEntryClockIn] = useState('07:00');
+  const [addEntryClockOut, setAddEntryClockOut] = useState('15:00');
+  const [addEntryError, setAddEntryError] = useState('');
   const [detailEmployeeId, setDetailEmployeeId] = useState(null);
   const [editEntryId, setEditEntryId] = useState(null);
   const [editDate, setEditDate] = useState('');
@@ -437,6 +445,36 @@ export default function App() {
     setTimeout(() => setRestoreMsg(''), 4000);
   };
 
+  const openAddEntry = () => {
+    setAddEntryType('delo');
+    setAddEntryLocationType('delavnica');
+    setAddEntrySite('');
+    setAddEntryClockIn('07:00');
+    setAddEntryClockOut('15:00');
+    setAddEntryError('');
+    setAddEntryOpen(true);
+  };
+
+  const createManualEntry = () => {
+    if (!isAdmin) return;
+    if (!uraFilterEmployee) { setAddEntryError('Izberi zaposlenega.'); return; }
+    if (addEntryType === 'delo') {
+      if (!addEntryClockIn) { setAddEntryError('Vnesi uro prihoda.'); return; }
+      const clockInIso = combineDateTime(uraViewDate, addEntryClockIn);
+      const clockOutIso = addEntryClockOut ? combineDateTime(uraViewDate, addEntryClockOut) : null;
+      if (clockOutIso && clockOutIso <= clockInIso) { setAddEntryError('Odhod mora biti za prihodom.'); return; }
+      const hours = clockOutIso ? hoursBetween(clockInIso, clockOutIso) : 0;
+      const locationType = addEntryLocationType === 'teren' ? 'teren' : 'delavnica';
+      const site = locationType === 'teren' ? (addEntrySite || '').trim() || 'Neimenovan objekt' : null;
+      const entry = { id: uid('e'), employeeId: uraFilterEmployee, type: 'delo', date: uraViewDate, clockIn: clockInIso, clockOut: clockOutIso, hours, locationType, site };
+      persistEntries([...entries, entry]);
+    } else {
+      const entry = { id: uid('a'), employeeId: uraFilterEmployee, type: addEntryType, date: uraViewDate, clockIn: null, clockOut: null, hours: 8 };
+      persistEntries([...entries, entry]);
+    }
+    setAddEntryOpen(false);
+  };
+
   // ---- Štemplanje ----
   const openEntryFor = (employeeId) =>
     entries.find((e) => e.employeeId === employeeId && e.type === 'delo' && !e.clockOut);
@@ -593,11 +631,12 @@ export default function App() {
   const selfId = currentUser?.type === 'employee' ? currentUser.id : null;
 
   const dayEntries = useMemo(() => {
-    const src = isAdmin ? entries : entries.filter((e) => e.employeeId === selfId);
+    let src = isAdmin ? entries : entries.filter((e) => e.employeeId === selfId);
+    if (isAdmin && uraFilterEmployee) src = src.filter((e) => e.employeeId === uraFilterEmployee);
     return [...src]
       .filter((e) => e.date === uraViewDate)
       .sort((a, b) => (b.clockIn || '').localeCompare(a.clockIn || ''));
-  }, [entries, isAdmin, selfId, uraViewDate]);
+  }, [entries, isAdmin, selfId, uraViewDate, uraFilterEmployee]);
 
   const forgottenClockOuts = useMemo(() => {
     return entries.filter((e) => e.type === 'delo' && !e.clockOut && e.date !== todayStr());
@@ -956,6 +995,24 @@ export default function App() {
                   )}
                 </div>
               </div>
+
+              {isAdmin && (
+                <div className="flex items-center justify-between flex-wrap gap-2 mb-4">
+                  <div className="flex items-center gap-2">
+                    <label className="text-xs" style={{ color: '#6B6459' }}>Zaposleni</label>
+                    <select value={uraFilterEmployee} onChange={(e) => setUraFilterEmployee(e.target.value)} className="p-2 text-sm" style={inputStyle}>
+                      <option value="">Vsi</option>
+                      {employees.map((emp) => <option key={emp.id} value={emp.id}>{emp.name}</option>)}
+                    </select>
+                  </div>
+                  {uraFilterEmployee && (
+                    <button onClick={openAddEntry} className="flex items-center gap-2 px-3 py-2 text-xs font-display uppercase tracking-wide" style={{ background: INK, color: PAPER }}>
+                      <Plus size={14} /> Dodaj vnos za ta dan
+                    </button>
+                  )}
+                </div>
+              )}
+
               {dayEntries.length === 0 ? (
                 <p className="text-sm py-6 text-center" style={{ color: '#9A917E' }}>Za ta dan ni vnosov.</p>
               ) : (
@@ -1255,6 +1312,62 @@ export default function App() {
           Podatki so shranjeni skupno za vso ekipo. PIN in geslo nudita osnovno ločevanje pogledov, nista pa namenjena varovanju občutljivih podatkov.
         </div>
       </div>
+
+      {isAdmin && addEntryOpen && (() => {
+        const emp = employees.find((e) => e.id === uraFilterEmployee);
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(38,36,32,0.6)' }}>
+            <div className="w-full max-w-sm p-6" style={{ background: CARD }}>
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-display uppercase text-lg tracking-wide">Dodaj vnos</h2>
+                <button onClick={() => setAddEntryOpen(false)}><X size={18} style={{ color: '#6B6459' }} /></button>
+              </div>
+              <p className="text-xs mb-4" style={{ color: '#6B6459' }}>{emp?.name} · {fmtDate(uraViewDate)}</p>
+
+              <label className="block text-xs mb-1" style={{ color: '#6B6459' }}>Vrsta</label>
+              <select value={addEntryType} onChange={(e) => setAddEntryType(e.target.value)} className="w-full p-2 text-sm mb-3" style={inputStyle}>
+                <option value="delo">Delo</option>
+                <option value="dopust">Dopust</option>
+                <option value="bolniska">Bolniška</option>
+                <option value="praznik">Praznik</option>
+              </select>
+
+              {addEntryType === 'delo' && (
+                <>
+                  <label className="block text-xs mb-1" style={{ color: '#6B6459' }}>Lokacija</label>
+                  <select value={addEntryLocationType} onChange={(e) => setAddEntryLocationType(e.target.value)} className="w-full p-2 text-sm mb-3" style={inputStyle}>
+                    <option value="delavnica">Delavnica</option>
+                    <option value="teren">Teren</option>
+                  </select>
+                  {addEntryLocationType === 'teren' && (
+                    <>
+                      <label className="block text-xs mb-1" style={{ color: '#6B6459' }}>Naziv objekta</label>
+                      <input value={addEntrySite} onChange={(e) => setAddEntrySite(e.target.value)} className="w-full p-2 text-sm mb-3" style={inputStyle} />
+                    </>
+                  )}
+                  <div className="grid grid-cols-2 gap-3 mb-3">
+                    <div>
+                      <label className="block text-xs mb-1" style={{ color: '#6B6459' }}>Prihod</label>
+                      <input type="time" value={addEntryClockIn} onChange={(e) => setAddEntryClockIn(e.target.value)} className="w-full p-2 text-sm font-mono" style={inputStyle} />
+                    </div>
+                    <div>
+                      <label className="block text-xs mb-1" style={{ color: '#6B6459' }}>Odhod</label>
+                      <input type="time" value={addEntryClockOut} onChange={(e) => setAddEntryClockOut(e.target.value)} className="w-full p-2 text-sm font-mono" style={inputStyle} />
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {addEntryError && <p className="text-xs mb-3" style={{ color: STAMP }}>{addEntryError}</p>}
+
+              <div className="flex gap-3">
+                <button onClick={createManualEntry} className="flex-1 py-2.5 font-display uppercase tracking-wide text-sm" style={{ background: INK, color: PAPER }}>Shrani</button>
+                <button onClick={() => setAddEntryOpen(false)} className="flex-1 py-2.5 font-display uppercase tracking-wide text-sm" style={{ border: `1px solid ${LINE}`, color: '#6B6459' }}>Prekliči</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {detailEmployeeId && (() => {
         const emp = employees.find((e) => e.id === detailEmployeeId);
