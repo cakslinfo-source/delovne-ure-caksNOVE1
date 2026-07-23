@@ -91,10 +91,11 @@ const WORK_END_HOUR = 15;
 // velja toleranca: prihod do 15 minut prej in odhod do 10 minut pozneje se NE
 // šteje kot nadura. Vse izven te tolerance se šteje natančno, minuto za minuto.
 // Nadure se štejejo natančno na minuto. Toleranca: prihod med 6:50 in 7:00 ter
-// odhod med 15:00 in 15:10 se NE šteje kot nadura (torej okno 6:50-15:10 = brez nadur).
+// odhod med 15:00 in 15:25 se NE šteje kot nadura (torej okno 6:50-15:25 = brez nadur).
 // Če je prihod/odhod izven tega okna, se šteje CEL čas od uradne meje (7:00 oz. 15:00) -
 // npr. prihod ob 6:30 pomeni 30 min nadure, odhod ob 15:25 pomeni 25 min nadure.
-const GRACE_MIN = 10;
+const EARLY_GRACE_MIN = 10;
+const LATE_GRACE_MIN = 25;
 function splitHours(clockInIso, clockOutIso, dateStr) {
   const start = new Date(clockInIso);
   const end = new Date(clockOutIso);
@@ -107,8 +108,8 @@ function splitHours(clockInIso, clockOutIso, dateStr) {
   const [y, m, d] = dateStr.split('-').map(Number);
   const winStart = new Date(y, m - 1, d, WORK_START_HOUR, 0, 0);
   const winEnd = new Date(y, m - 1, d, WORK_END_HOUR, 0, 0);
-  const graceStart = new Date(winStart.getTime() - GRACE_MIN * 60000);
-  const graceEnd = new Date(winEnd.getTime() + GRACE_MIN * 60000);
+  const graceStart = new Date(winStart.getTime() - EARLY_GRACE_MIN * 60000);
+  const graceEnd = new Date(winEnd.getTime() + LATE_GRACE_MIN * 60000);
 
   const overlapMs = Math.max(0, Math.min(end.getTime(), winEnd.getTime()) - Math.max(start.getTime(), winStart.getTime()));
   const regular = overlapMs / 1000 / 60 / 60;
@@ -1209,7 +1210,7 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
-                <p className="text-xs mt-3" style={{ color: '#9A917E' }}>Redne ure: ponedeljek–petek med 7:00 in 15:00. Nadure: natančno na minuto. Okno 6:50–15:10 se ne šteje kot nadura; izven tega okna se šteje cel čas od 7:00 oz. do 15:00. Sobota in nedelja: cel čas dela = nadura.</p>
+                <p className="text-xs mt-3" style={{ color: '#9A917E' }}>Redne ure: ponedeljek–petek med 7:00 in 15:00. Nadure: natančno na minuto. Okno 6:50–15:25 se ne šteje kot nadura; izven tega okna se šteje cel čas od 7:00 oz. do 15:00. Sobota in nedelja: cel čas dela = nadura.</p>
               </>
             )}
           </div>
