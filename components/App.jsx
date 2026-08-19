@@ -295,6 +295,22 @@ export default function App() {
     catch (e) { console.error('Napaka pri shranjevanju vnosov', e); }
   }, []);
 
+  // Varno spreminjanje vnosov: pred vsakim zapisom najprej prebere najnovejše
+  // stanje iz baze (ne zanaša se samo na lokalno stanje v brskalniku), da dva
+  // sodelavca, ki štemplata skoraj istočasno, drug drugemu ne prepišeta vnosa.
+  const mutateEntries = useCallback(async (updaterFn) => {
+    let fresh = entries;
+    try {
+      const r = await kvGet('entries');
+      if (r && r.value) fresh = JSON.parse(r.value);
+    } catch (e) { /* uporabi lokalno stanje, če branje ne uspe */ }
+    const updated = updaterFn(fresh);
+    setEntries(updated);
+    try { await kvSet('entries', JSON.stringify(updated)); }
+    catch (e) { console.error('Napaka pri shranjevanju vnosov', e); }
+    return updated;
+  }, [entries]);
+
   const persistAdminPassword = useCallback(async (pass) => {
     setAdminPassword(pass);
     try { await kvSet('admin_password', pass); }
@@ -320,7 +336,11 @@ export default function App() {
       });
     });
     if (newEntries.length > 0) {
-      persistEntries([...entries, ...newEntries]);
+      mutateEntries((cur) => {
+        const curKeys = new Set(cur.filter((e) => e.type === 'praznik').map((e) => `${e.employeeId}|${e.date}`));
+        const toAdd = newEntries.filter((e) => !curKeys.has(`${e.employeeId}|${e.date}`));
+        return toAdd.length > 0 ? [...cur, ...toAdd] : cur;
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, employees, entries]);
@@ -393,7 +413,7 @@ export default function App() {
       return;
     }
     persistEmployees(employees.filter((e) => e.id !== id));
-    persistEntries(entries.filter((e) => e.employeeId !== id));
+    mutateEntries((cur) => cur.filter((e) => e.employeeId !== id));
     setConfirmDelId(null);
   };
 
@@ -468,10 +488,10 @@ export default function App() {
       const locationType = addEntryLocationType === 'teren' ? 'teren' : 'delavnica';
       const site = locationType === 'teren' ? (addEntrySite || '').trim() || 'Neimenovan objekt' : null;
       const entry = { id: uid('e'), employeeId: uraFilterEmployee, type: 'delo', date: uraViewDate, clockIn: clockInIso, clockOut: clockOutIso, hours, locationType, site };
-      persistEntries([...entries, entry]);
+      mutateEntries((cur) => [...cur, entry]);
     } else {
       const entry = { id: uid('a'), employeeId: uraFilterEmployee, type: addEntryType, date: uraViewDate, clockIn: null, clockOut: null, hours: 8 };
-      persistEntries([...entries, entry]);
+      mutateEntries((cur) => [...cur, entry]);
     }
     setAddEntryOpen(false);
   };
@@ -481,17 +501,18 @@ export default function App() {
     entries.find((e) => e.employeeId === employeeId && e.type === 'delo' && !e.clockOut);
 
   const punch = (employeeId, location) => {
-    const open = openEntryFor(employeeId);
     const nowIso = new Date().toISOString();
-    if (open) {
-      const hours = hoursBetween(open.clockIn, nowIso);
-      persistEntries(entries.map((e) => (e.id === open.id ? { ...e, clockOut: nowIso, hours } : e)));
-    } else {
+    mutateEntries((cur) => {
+      const openFresh = cur.find((e) => e.employeeId === employeeId && e.type === 'delo' && !e.clockOut);
+      if (openFresh) {
+        const hours = hoursBetween(openFresh.clockIn, nowIso);
+        return cur.map((e) => (e.id === openFresh.id ? { ...e, clockOut: nowIso, hours } : e));
+      }
       const locationType = location?.type === 'teren' ? 'teren' : 'delavnica';
       const site = locationType === 'teren' ? (location.site || '').trim() || 'Neimenovan objekt' : null;
       const entry = { id: uid('e'), employeeId, type: 'delo', date: todayStr(), clockIn: nowIso, clockOut: null, hours: 0, locationType, site };
-      persistEntries([...entries, entry]);
-    }
+      return [...cur, entry];
+    });
     setAnimatingId(employeeId);
     setTimeout(() => setAnimatingId((a) => (a === employeeId ? null : a)), 400);
   };
@@ -522,7 +543,7 @@ export default function App() {
   const confirmAbsenceInline = (employeeId) => {
     const { newEntries, error } = buildAbsenceEntries(employeeId, pendingKind, pendingAbsStart, pendingAbsEnd);
     if (error) { setPendingAbsMsg(error); return; }
-    persistEntries([...entries, ...newEntries]);
+    mutateEntries((cur) => [...cur, ...newEntries]);
     cancelPunchPanel();
   };
 
@@ -533,7 +554,7 @@ export default function App() {
       setTimeout(() => setConfirmEntryId((c) => (c === id ? null : c)), 3000);
       return;
     }
-    persistEntries(entries.filter((e) => e.id !== id));
+    mutateEntries((cur) => cur.filter((e) => e.id !== id));
     setConfirmEntryId(null);
   };
 
@@ -571,9 +592,9 @@ export default function App() {
       const hours = clockOutIso ? hoursBetween(clockInIso, clockOutIso) : 0;
       const locationType = editLocationType === 'teren' ? 'teren' : 'delavnica';
       const site = locationType === 'teren' ? (editSite || '').trim() || 'Neimenovan objekt' : null;
-      persistEntries(entries.map((e) => (e.id === editEntryId ? { ...e, date: editDate, clockIn: clockInIso, clockOut: clockOutIso, hours, locationType, site } : e)));
+      mutateEntries((cur) => cur.map((e) => (e.id === editEntryId ? { ...e, date: editDate, clockIn: clockInIso, clockOut: clockOutIso, hours, locationType, site } : e)));
     } else {
-      persistEntries(entries.map((e) => (e.id === editEntryId ? { ...e, date: editDate, type: editAbsType } : e)));
+      mutateEntries((cur) => cur.map((e) => (e.id === editEntryId ? { ...e, date: editDate, type: editAbsType } : e)));
     }
     cancelEdit();
   };
@@ -599,7 +620,7 @@ export default function App() {
     const employeeId = forcedEmployeeId || absEmployee;
     const { newEntries, error } = buildAbsenceEntries(employeeId, absType, absStart, absEnd);
     if (error) { setAbsMsg(error); return; }
-    persistEntries([...entries, ...newEntries]);
+    mutateEntries((cur) => [...cur, ...newEntries]);
     setAbsMsg(`Dodanih ${newEntries.length} dni.`);
     setTimeout(() => setAbsMsg(''), 3000);
   };
