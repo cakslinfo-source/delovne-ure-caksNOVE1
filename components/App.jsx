@@ -1,5 +1,5 @@
 'use client';
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Clock, LogIn, LogOut, Plus, Trash2, Users, CalendarDays, TrendingUp, Stethoscope, Sun, Loader2, ShieldCheck, User, Eye, EyeOff, RotateCcw, ArrowLeft, LogOutIcon, Printer, X, Pencil, AlertTriangle, Download, Upload } from 'lucide-react';
 
 // Nadomestek za window.storage (deluje samo znotraj Claude artefaktov) -
@@ -298,17 +298,26 @@ export default function App() {
   // Varno spreminjanje vnosov: pred vsakim zapisom najprej prebere najnovejše
   // stanje iz baze (ne zanaša se samo na lokalno stanje v brskalniku), da dva
   // sodelavca, ki štemplata skoraj istočasno, drug drugemu ne prepišeta vnosa.
-  const mutateEntries = useCallback(async (updaterFn) => {
-    let fresh = entries;
-    try {
-      const r = await kvGet('entries');
-      if (r && r.value) fresh = JSON.parse(r.value);
-    } catch (e) { /* uporabi lokalno stanje, če branje ne uspe */ }
-    const updated = updaterFn(fresh);
-    setEntries(updated);
-    try { await kvSet('entries', JSON.stringify(updated)); }
-    catch (e) { console.error('Napaka pri shranjevanju vnosov', e); }
-    return updated;
+  const mutationQueueRef = useRef(Promise.resolve());
+  const mutateEntries = useCallback((updaterFn) => {
+    const run = async () => {
+      let fresh = entries;
+      try {
+        const r = await kvGet('entries');
+        if (r && r.value) fresh = JSON.parse(r.value);
+      } catch (e) { /* uporabi lokalno stanje, če branje ne uspe */ }
+      const updated = updaterFn(fresh);
+      setEntries(updated);
+      try { await kvSet('entries', JSON.stringify(updated)); }
+      catch (e) { console.error('Napaka pri shranjevanju vnosov', e); }
+      return updated;
+    };
+    // Vsak naslednji klic počaka, da se prejšnji v celoti zaključi (branje + zapis),
+    // preden začne svojega - tako dve skoraj sočasni spremembi na isti napravi
+    // (npr. štemplanje in samodejno generiranje praznikov) druga drugi ne prepišeta rezultata.
+    const next = mutationQueueRef.current.then(run, run);
+    mutationQueueRef.current = next.catch(() => {});
+    return next;
   }, [entries]);
 
   const persistAdminPassword = useCallback(async (pass) => {
@@ -343,7 +352,7 @@ export default function App() {
       });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, employees, entries]);
+  }, [loaded, employees]);
 
   // ---- Prijava ----
   const doSetup = () => {
