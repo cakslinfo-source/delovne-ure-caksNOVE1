@@ -1,6 +1,8 @@
 'use client';
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Clock, LogIn, LogOut, Plus, Trash2, Users, CalendarDays, TrendingUp, Stethoscope, Sun, Loader2, ShieldCheck, User, Eye, EyeOff, RotateCcw, ArrowLeft, LogOutIcon, Printer, X, Pencil, AlertTriangle, Download, Upload } from 'lucide-react';
+import { Clock, LogIn, LogOut, Plus, Trash2, Users, CalendarDays, TrendingUp, Stethoscope, Sun, Loader2, ShieldCheck, User, Eye, EyeOff, RotateCcw, ArrowLeft, LogOutIcon, Printer, X, Pencil, AlertTriangle, Download, Upload, QrCode, Camera, Check } from 'lucide-react';
+import jsQR from 'jsqr';
+import QRCode from 'qrcode';
 
 // Nadomestek za window.storage (deluje samo znotraj Claude artefaktov) -
 // tukaj kličemo naš lasten API, ki podatke shrani v pravo bazo (Vercel KV).
@@ -26,6 +28,124 @@ const TEAL = '#3E6F63';
 const AMBER = '#C08829';
 const LINE = '#DDD6C7';
 const CARD = '#FFFFFF';
+
+// ---------------- QR KODE ----------------
+const QR_PREFIX = 'CAKS:';
+function newQrToken() {
+  try {
+    const a = new Uint8Array(12);
+    crypto.getRandomValues(a);
+    return Array.from(a).map((b) => b.toString(16).padStart(2, '0')).join('');
+  } catch (e) {
+    return (Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2) + Date.now().toString(36)).slice(0, 24);
+  }
+}
+
+function QrImage({ text, size = 220 }) {
+  const [src, setSrc] = useState('');
+  useEffect(() => {
+    let alive = true;
+    QRCode.toDataURL(text, { width: size * 2, margin: 1, errorCorrectionLevel: 'M' })
+      .then((u) => { if (alive) setSrc(u); })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, [text, size]);
+  if (!src) return <div style={{ width: size, height: size }} />;
+  return <img src={src} alt="QR koda" style={{ width: size, height: size, imageRendering: 'pixelated' }} />;
+}
+
+function QrScanner({ onResult }) {
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const onResultRef = useRef(onResult);
+  const [facing, setFacing] = useState('user');
+  const [error, setError] = useState('');
+  useEffect(() => { onResultRef.current = onResult; }, [onResult]);
+
+  useEffect(() => {
+    let stream = null;
+    let raf = 0;
+    let stopped = false;
+    let lastText = '';
+    let lastAt = 0;
+    setError('');
+
+    const tick = () => {
+      if (stopped) return;
+      const v = videoRef.current;
+      const c = canvasRef.current;
+      if (v && c && v.readyState === v.HAVE_ENOUGH_DATA && v.videoWidth) {
+        const w = v.videoWidth;
+        const h = v.videoHeight;
+        const scale = Math.min(1, 640 / Math.max(w, h));
+        c.width = Math.round(w * scale);
+        c.height = Math.round(h * scale);
+        const ctx = c.getContext('2d', { willReadFrequently: true });
+        ctx.drawImage(v, 0, 0, c.width, c.height);
+        const img = ctx.getImageData(0, 0, c.width, c.height);
+        const code = jsQR(img.data, c.width, c.height, { inversionAttempts: 'dontInvert' });
+        if (code && code.data) {
+          const now = Date.now();
+          if (code.data !== lastText || now - lastAt > 3000) {
+            lastText = code.data;
+            lastAt = now;
+            onResultRef.current && onResultRef.current(code.data);
+          }
+        }
+      }
+      raf = requestAnimationFrame(tick);
+    };
+
+    (async () => {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          setError('Ta brskalnik ne omogoča dostopa do kamere.');
+          return;
+        }
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: false,
+        });
+        if (stopped) { stream.getTracks().forEach((t) => t.stop()); return; }
+        const v = videoRef.current;
+        if (v) {
+          v.srcObject = stream;
+          v.setAttribute('playsinline', 'true');
+          await v.play().catch(() => {});
+        }
+        raf = requestAnimationFrame(tick);
+      } catch (e) {
+        if (e && (e.name === 'NotAllowedError' || e.name === 'SecurityError')) setError('Dostop do kamere ni dovoljen. V brskalniku dovoli uporabo kamere za to stran in poskusi znova.');
+        else if (e && e.name === 'NotFoundError') setError('Kamere ni mogoče najti na tej napravi.');
+        else setError('Kamere ni mogoče zagnati.');
+      }
+    })();
+
+    return () => {
+      stopped = true;
+      cancelAnimationFrame(raf);
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+    };
+  }, [facing]);
+
+  return (
+    <div>
+      <div className="relative w-full" style={{ background: '#000', aspectRatio: '1 / 1', overflow: 'hidden' }}>
+        <video ref={videoRef} muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', transform: facing === 'user' ? 'scaleX(-1)' : 'none' }} />
+        <canvas ref={canvasRef} style={{ display: 'none' }} />
+        {!error && (
+          <div style={{ position: 'absolute', inset: '15%', border: '3px solid rgba(255,255,255,0.85)', borderRadius: 8, pointerEvents: 'none' }} />
+        )}
+        {error && (
+          <div className="absolute inset-0 flex items-center justify-center p-4 text-center text-sm" style={{ color: '#fff' }}>{error}</div>
+        )}
+      </div>
+      <button onClick={() => setFacing((f) => (f === 'user' ? 'environment' : 'user'))} className="flex items-center gap-1 text-xs mt-2 mx-auto" style={{ color: '#6B6459' }}>
+        <Camera size={13} /> Zamenjaj kamero
+      </button>
+    </div>
+  );
+}
 
 function uid(prefix) {
   return prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -228,6 +348,14 @@ export default function App() {
 
   const [overviewMonth, setOverviewMonth] = useState(todayStr().slice(0, 7));
   const [printTarget, setPrintTarget] = useState(null);
+  const [scanMode, setScanMode] = useState(null); // 'prihod' | 'odhod' | null
+  const [scanEmp, setScanEmp] = useState(null);
+  const [scanStep, setScanStep] = useState('scan'); // 'scan' | 'location' | 'result'
+  const [scanType, setScanType] = useState('delavnica');
+  const [scanSite, setScanSite] = useState('');
+  const [scanMsg, setScanMsg] = useState({ ok: true, text: '' });
+  const scanSessionRef = useRef(0);
+  const [qrModal, setQrModal] = useState(null); // null | 'all' | employeeId
   const [uraViewDate, setUraViewDate] = useState(todayStr());
   const [uraFilterEmployee, setUraFilterEmployee] = useState('');
   const [addEntryOpen, setAddEntryOpen] = useState(false);
@@ -402,6 +530,7 @@ export default function App() {
       color: PALETTE[employees.length % PALETTE.length],
       vacationDaysPerYear: Number(newVacDays) || 20,
       pin,
+      qrToken: newQrToken(),
     };
     persistEmployees([...employees, emp]);
     setNewName('');
@@ -503,6 +632,95 @@ export default function App() {
       mutateEntries((cur) => [...cur, entry]);
     }
     setAddEntryOpen(false);
+  };
+
+  // ---- QR štemplanje (prva stran) ----
+  const closeScan = () => {
+    scanSessionRef.current += 1;
+    setScanMode(null);
+    setScanEmp(null);
+    setScanStep('scan');
+    setScanType('delavnica');
+    setScanSite('');
+  };
+
+  const showScanResult = (ok, text) => {
+    setScanMsg({ ok, text });
+    setScanStep('result');
+    const session = scanSessionRef.current;
+    setTimeout(() => { if (scanSessionRef.current === session) closeScan(); }, 5000);
+  };
+
+  const openScan = async (mode) => {
+    scanSessionRef.current += 1;
+    setScanMode(mode);
+    setScanEmp(null);
+    setScanStep('scan');
+    setScanType('delavnica');
+    setScanSite('');
+    // osveži seznam zaposlenih (da so vidne nove QR kode)
+    try {
+      const r = await kvGet('employees');
+      if (r && r.value) setEmployees(JSON.parse(r.value));
+    } catch (e) { /* ignore */ }
+  };
+
+  const handleScanned = (text) => {
+    if (scanStep !== 'scan' || !scanMode) return;
+    if (typeof text !== 'string' || !text.startsWith(QR_PREFIX)) return;
+    const token = text.slice(QR_PREFIX.length).trim();
+    const emp = employees.find((e) => e.qrToken && e.qrToken === token);
+    if (!emp) {
+      showScanResult(false, 'QR koda ni prepoznana. Obrni se na administratorja.');
+      return;
+    }
+    setScanEmp(emp);
+    if (scanMode === 'prihod') {
+      const open = entries.find((e) => e.employeeId === emp.id && e.type === 'delo' && !e.clockOut);
+      if (open) {
+        showScanResult(false, `${emp.name}, že si prijavljen/a (prihod ob ${fmtTime(open.clockIn)}).`);
+        return;
+      }
+      setScanStep('location');
+    } else {
+      confirmScanOdhod(emp);
+    }
+  };
+
+  const confirmScanPrihod = (emp) => {
+    const nowIso = new Date().toISOString();
+    const locationType = scanType === 'teren' ? 'teren' : 'delavnica';
+    const site = locationType === 'teren' ? scanSite.trim() || 'Neimenovan objekt' : null;
+    let already = null;
+    mutateEntries((cur) => {
+      const open = cur.find((e) => e.employeeId === emp.id && e.type === 'delo' && !e.clockOut);
+      if (open) { already = open; return cur; }
+      return [...cur, { id: uid('e'), employeeId: emp.id, type: 'delo', date: todayStr(), clockIn: nowIso, clockOut: null, hours: 0, locationType, site }];
+    }).then(() => {
+      if (already) showScanResult(false, `${emp.name}, že si prijavljen/a (prihod ob ${fmtTime(already.clockIn)}).`);
+      else showScanResult(true, `${emp.name}, prihod zabeležen ob ${fmtTime(nowIso)}.`);
+    });
+  };
+
+  const confirmScanOdhod = (emp) => {
+    const nowIso = new Date().toISOString();
+    let outcome = 'none';
+    let inTime = null;
+    mutateEntries((cur) => {
+      const open = cur.filter((e) => e.employeeId === emp.id && e.type === 'delo' && !e.clockOut);
+      const today = open.find((e) => e.date === todayStr());
+      if (today) {
+        outcome = 'ok';
+        inTime = today.clockIn;
+        return cur.map((e) => (e.id === today.id ? { ...e, clockOut: nowIso, hours: hoursBetween(today.clockIn, nowIso) } : e));
+      }
+      if (open.length > 0) outcome = 'old';
+      return cur;
+    }).then(() => {
+      if (outcome === 'ok') showScanResult(true, `${emp.name}, odhod zabeležen ob ${fmtTime(nowIso)}.`);
+      else if (outcome === 'old') showScanResult(false, `${emp.name}, imaš neizpisan prihod iz prejšnjega dne. Obvesti administratorja, da ga popravi.`);
+      else showScanResult(false, `${emp.name}, danes nimaš zabeleženega prihoda.`);
+    });
   };
 
   // ---- Štemplanje ----
@@ -673,6 +891,21 @@ export default function App() {
     return entries.filter((e) => e.type === 'delo' && !e.clockOut && e.date !== todayStr());
   }, [entries]);
 
+  // Administrator ob prijavi samodejno ustvari QR žetone zaposlenim, ki jih še nimajo.
+  useEffect(() => {
+    if (!loaded || currentUser?.type !== 'admin') return;
+    if (!employees.some((e) => !e.qrToken)) return;
+    (async () => {
+      let fresh = employees;
+      try {
+        const r = await kvGet('employees');
+        if (r && r.value) fresh = JSON.parse(r.value);
+      } catch (e) { /* uporabi lokalno */ }
+      if (!fresh.some((e) => !e.qrToken)) { setEmployees(fresh); return; }
+      persistEmployees(fresh.map((e) => (e.qrToken ? e : { ...e, qrToken: newQrToken() })));
+    })();
+  }, [loaded, currentUser, employees, persistEmployees]);
+
   const absenceEntries = useMemo(() => {
     const src = isAdmin ? entries : entries.filter((e) => e.employeeId === selfId);
     return [...src].filter((e) => e.type !== 'delo').sort((a, b) => b.date.localeCompare(a.date)).slice(0, 30);
@@ -743,16 +976,68 @@ export default function App() {
     );
   }
 
+  const scanModal = scanMode ? (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(38,36,32,0.75)' }}>
+      <div className="w-full max-w-sm p-5" style={{ background: CARD, border: `1px solid ${LINE}` }}>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="font-display text-xl uppercase tracking-wide">{scanMode === 'prihod' ? 'Prihod' : 'Odhod'}</h2>
+          <button onClick={closeScan} title="Zapri"><X size={20} /></button>
+        </div>
+
+        {scanStep === 'scan' && (
+          <div>
+            <p className="text-sm mb-3" style={{ color: '#6B6459' }}>Pokaži svojo QR kodo kameri.</p>
+            <QrScanner onResult={handleScanned} />
+          </div>
+        )}
+
+        {scanStep === 'location' && scanEmp && (
+          <div>
+            <p className="text-sm mb-3">Pozdravljen/a, <strong>{scanEmp.name}</strong>. Kje boš delal/a?</p>
+            <div className="grid grid-cols-2 gap-2 mb-3">
+              {[['delavnica', 'Delavnica'], ['teren', 'Teren']].map(([k, label]) => (
+                <button key={k} onClick={() => setScanType(k)} className="py-3 font-display uppercase tracking-wide text-sm" style={{ background: scanType === k ? INK : 'transparent', color: scanType === k ? PAPER : INK, border: `1px solid ${INK}` }}>{label}</button>
+              ))}
+            </div>
+            {scanType === 'teren' && (
+              <input value={scanSite} onChange={(e) => setScanSite(e.target.value)} placeholder="Objekt / lokacija" className="w-full p-2 text-sm mb-3" style={inputStyle} />
+            )}
+            <button onClick={() => confirmScanPrihod(scanEmp)} className="w-full py-3 font-display uppercase tracking-wide text-sm" style={{ background: STAMP, color: '#fff' }}>Potrdi prihod</button>
+          </div>
+        )}
+
+        {scanStep === 'result' && (
+          <div className="text-center py-4">
+            <div className="mx-auto mb-3 flex items-center justify-center" style={{ width: 56, height: 56, borderRadius: '50%', background: scanMsg.ok ? TEAL : STAMP, color: '#fff' }}>
+              {scanMsg.ok ? <Check size={30} /> : <AlertTriangle size={28} />}
+            </div>
+            <p className="text-sm mb-4">{scanMsg.text}</p>
+            <button onClick={closeScan} className="px-5 py-2 font-display uppercase tracking-wide text-sm" style={{ background: INK, color: PAPER }}>V redu</button>
+          </div>
+        )}
+      </div>
+    </div>
+  ) : null;
+
   // ---------------- PRIJAVA ----------------
   if (!currentUser) {
     return (
       <div style={{ background: PAPER, color: INK, minHeight: '100vh', fontFamily: "'Inter', sans-serif" }} className="flex items-center justify-center px-4">
         {globalStyle}
+        {scanModal}
         <div className="w-full max-w-sm p-6" style={{ background: CARD, border: `1px solid ${LINE}` }}>
           <h1 className="font-display text-2xl uppercase tracking-wide mb-6 text-center">Delovne ure Kamnoseštvo Čakš</h1>
 
           {loginMode === 'choose' && (
             <div className="flex flex-col gap-3">
+              <div className="grid grid-cols-2 gap-3 mb-2">
+                <button onClick={() => openScan('prihod')} className="flex flex-col items-center justify-center gap-2 py-6 font-display uppercase tracking-wide text-lg" style={{ background: TEAL, color: '#fff' }}>
+                  <LogIn size={26} /> Prihod
+                </button>
+                <button onClick={() => openScan('odhod')} className="flex flex-col items-center justify-center gap-2 py-6 font-display uppercase tracking-wide text-lg" style={{ background: STAMP, color: '#fff' }}>
+                  <LogOut size={26} /> Odhod
+                </button>
+              </div>
               <button onClick={() => setLoginMode('employee')} className="flex items-center justify-center gap-2 py-3 font-display uppercase tracking-wide text-sm" style={{ background: STAMP, color: '#fff' }}>
                 <User size={16} /> Sem zaposlen/a
               </button>
@@ -1274,6 +1559,12 @@ export default function App() {
             {employees.length === 0 ? (
               <p className="text-sm" style={{ color: '#9A917E' }}>Še ni dodanih zaposlenih.</p>
             ) : (
+              <>
+              <div className="flex justify-end mb-3">
+                <button onClick={() => setQrModal('all')} className="flex items-center gap-2 px-4 py-2 font-display text-sm uppercase tracking-wide" style={{ background: INK, color: PAPER }}>
+                  <QrCode size={15} /> QR kode za tisk
+                </button>
+              </div>
               <div style={{ border: `1px solid ${LINE}`, background: CARD }}>
                 {employees.map((emp, i) => (
                   <div key={emp.id} className="flex flex-wrap items-center justify-between gap-2 px-4 py-3" style={{ borderBottom: i < employees.length - 1 ? `1px solid ${LINE}` : 'none' }}>
@@ -1289,6 +1580,7 @@ export default function App() {
                           {visiblePinId === emp.id ? <EyeOff size={13} /> : <Eye size={13} />}
                         </button>
                       </span>
+                      <button onClick={() => setQrModal(emp.id)} className="flex items-center gap-1 text-xs" style={{ color: '#6B6459' }} title="QR koda"><QrCode size={14} /> QR koda</button>
                       <button onClick={() => resetPin(emp.id)} className="flex items-center gap-1 text-xs" style={{ color: '#6B6459' }} title="Nov PIN"><RotateCcw size={13} /> Nov PIN</button>
                       <button onClick={() => deleteEmployee(emp.id)} className="flex items-center gap-1 text-xs" style={{ color: confirmDelId === emp.id ? STAMP : '#B5AE9E' }}>
                         <Trash2 size={14} /> {confirmDelId === emp.id ? 'Klikni znova za potrditev' : 'Izbriši'}
@@ -1297,6 +1589,7 @@ export default function App() {
                   </div>
                 ))}
               </div>
+              </>
             )}
 
             <div className="p-5 mt-8" style={{ background: CARD, border: `1px solid ${LINE}` }}>
@@ -1551,6 +1844,31 @@ export default function App() {
               <div className="flex gap-3">
                 <button onClick={saveEdit} className="flex-1 py-2.5 font-display uppercase tracking-wide text-sm" style={{ background: INK, color: PAPER }}>Shrani</button>
                 <button onClick={cancelEdit} className="flex-1 py-2.5 font-display uppercase tracking-wide text-sm" style={{ border: `1px solid ${LINE}`, color: '#6B6459' }}>Prekliči</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {qrModal && isAdmin && (() => {
+        const list = qrModal === 'all' ? employees : employees.filter((e) => e.id === qrModal);
+        return (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(38,36,32,0.6)' }}>
+            <div className="w-full max-w-2xl max-h-[90vh] flex flex-col" style={{ background: CARD }}>
+              <div id="print-area" className="p-6 overflow-y-auto">
+                <div style={{ display: 'grid', gridTemplateColumns: list.length === 1 ? '1fr' : 'repeat(2, 1fr)', gap: 16 }}>
+                  {list.map((emp) => (
+                    <div key={emp.id} style={{ border: `1px solid ${LINE}`, padding: 16, textAlign: 'center', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+                      <div className="font-display uppercase tracking-wide text-sm mb-2">Kamnoseštvo Čakš</div>
+                      {emp.qrToken ? <div className="flex justify-center"><QrImage text={QR_PREFIX + emp.qrToken} size={200} /></div> : <p className="text-xs py-10" style={{ color: '#9A917E' }}>QR koda se ustvarja…</p>}
+                      <div className="font-display text-lg tracking-wide mt-2">{emp.name}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="flex justify-end gap-2 p-4" style={{ borderTop: `1px solid ${LINE}` }}>
+                <button onClick={() => window.print()} className="flex items-center gap-2 px-4 py-2 font-display text-sm uppercase tracking-wide" style={{ background: INK, color: PAPER }}><Printer size={15} /> Natisni</button>
+                <button onClick={() => setQrModal(null)} className="px-4 py-2 font-display text-sm uppercase tracking-wide" style={{ border: `1px solid ${LINE}` }}>Zapri</button>
               </div>
             </div>
           </div>
